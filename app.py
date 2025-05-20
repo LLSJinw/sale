@@ -1,133 +1,121 @@
 import streamlit as st
+import requests
 import pandas as pd
 from rapidfuzz import fuzz
-import requests
 
-# --- Manual Mapping for Known Organizations ---
-manual_org_map = {
-    "กองทัพเรือ": {
-        "Sector": "Government / Defense (CII)",
-        "Compliance Pressure": "Thai Cyber Law, ISO 27001",
-        "Regulator": "NCSA",
-        "Recommended Services": "Cyber Risk Assessment (IT/OT), IRP & Playbook, Tabletop Exercise"
-    },
-    # Add more exact names here if needed
-}
-
-# --- Sector Data with Keywords ---
-data = [
+# --- Sector Mapping Table (Thai-sector-specific) ---
+sector_data = [
     {
         "Sector": "Critical Infrastructure (CII)",
-        "Keywords": ["EGAT", "AOT", "PEA", "MEA", "PTT"],
-        "Compliance Pressure": "Thai Cyber Law, ISO 27001, NCSA",
-        "Regulator": "NCSA",
-        "Recommended Services": "Cyber Risk Assessment (IT/OT), Tabletop Exercise, IRP & Playbook, Gap Assessment"
+        "Keywords": ["ไฟฟ้า", "สนามบิน", "น้ำมัน", "ประปา", "EGAT", "AOT", "MEA", "PTT", "electricity", "airport", "refined petroleum"],
+        "Recommended Services": "Cyber Risk Assessment (IT/OT), TTX, IRP & Playbook, BCP Alignment"
     },
     {
         "Sector": "Banking / Finance / Insurance (BFSI)",
-        "Keywords": ["Krungthai", "SCB", "Bangkok Bank", "Muang Thai Life", "TMB"],
-        "Compliance Pressure": "PDPA, BOT Regulation, OIC Guidelines",
-        "Regulator": "BOT, OIC",
-        "Recommended Services": "PDPA Consult, Pentest, Awareness Training, Source Code Scan, IRP"
+        "Keywords": ["ธนาคาร", "bank", "insurance", "Krungthai", "SCB", "TMB", "financial", "fintech"],
+        "Recommended Services": "PDPA Consult, Pentest, Source Code Scan, IRP & Playbook"
     },
     {
         "Sector": "Healthcare",
-        "Keywords": ["Bumrungrad", "BDMS", "Rama Hospital", "Siriraj"],
-        "Compliance Pressure": "PDPA, Thai Cyber Law",
-        "Regulator": "PDPC, MOPH",
-        "Recommended Services": "PDPA Consult, Cyber Risk Assessment, Awareness Training, Backup Review"
+        "Keywords": ["hospital", "healthcare", "pharma", "clinic", "ศิริราช", "BDMS", "รพ", "medic", "health"],
+        "Recommended Services": "PDPA Consult, IRP, TTX, Backup Review, Phishing Simulation"
     },
     {
         "Sector": "Government / SOE",
-        "Keywords": ["Ministry", "Department", "สำนักงาน", "การทางพิเศษ", "การประปา"],
-        "Compliance Pressure": "Thai Cyber Law, อว3/อช3, ISO 27001",
-        "Regulator": "ETDA, NCSA",
-        "Recommended Services": "Cyber Gap Assessment, อว3/อช3 Consult, IRP, Tabletop Exercise"
+        "Keywords": ["government", "กระทรวง", "ministry", "department", "state enterprise", "SOE", "สำนักงาน"],
+        "Recommended Services": "อว3/อช3 Consult, TTX, Cyber Gap Assessment, IRP"
     },
     {
-        "Sector": "Software / SaaS",
-        "Keywords": ["LINE MAN", "SCB Tech X", "Appman", "Bitkub"],
-        "Compliance Pressure": "PDPA, Secure SDLC, Thai Cyber Law",
-        "Regulator": "PDPC, NCSA",
-        "Recommended Services": "Source Code Scan, Pentest, Secure SDLC Advisory"
+        "Sector": "Telco / ISP",
+        "Keywords": ["AIS", "NT", "True", "โทรคมนาคม", "telecom", "ISP"],
+        "Recommended Services": "Zero Trust Readiness, CSOC, Gap Assessment, IRP"
+    },
+    {
+        "Sector": "Software / SaaS / Tech",
+        "Keywords": ["software", "SaaS", "Dev", "Bitkub", "LINE MAN", "Appman", "developer", "platform"],
+        "Recommended Services": "Secure SDLC Advisory, Source Code Scan, Pentest"
     },
     {
         "Sector": "Retail / SME / Logistics",
-        "Keywords": ["Shopee", "Lazada", "Kerry", "Makro"],
-        "Compliance Pressure": "PDPA, BCP/DRP",
-        "Regulator": "PDPC",
-        "Recommended Services": "Phishing Sim, Awareness Training, PDPA Consult, VA Scan"
+        "Keywords": ["Shopee", "Makro", "Lazada", "ค้าปลีก", "SME", "logistics", "retail", "warehouse"],
+        "Recommended Services": "Phishing Sim, VA Scan, PDPA Consult, Awareness Training"
     },
     {
         "Sector": "Manufacturing / OT-heavy",
-        "Keywords": ["SCG", "IRPC", "Thai Union", "PTTGC"],
-        "Compliance Pressure": "Thai Cyber Law, ISO 27001, Supply Chain Risk",
-        "Regulator": "NCSA",
+        "Keywords": ["SCG", "โรงงาน", "factory", "industry", "industrial", "manufacture", "production"],
         "Recommended Services": "Cyber Risk Assessment (IT/OT), IRP, TTX, Backup/Restore Drill"
     }
 ]
 
-# Convert to DataFrame for keyword-based lookup
-df = pd.DataFrame(data)
+df_sector = pd.DataFrame(sector_data)
 
-def query_wikidata_org_info(org_name):
-    query = f'''
-    SELECT ?item ?itemLabel ?sectorLabel WHERE {{
-      ?item ?label "{org_name}"@th.
-      OPTIONAL {{ ?item wdt:P31 ?sector. }}
-      SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en,th" }}
-    }} LIMIT 1
-    '''
+# --- Fuzzy Sector Mapping ---
+def fuzzy_sector_match(text):
+    best_score = 0
+    best_sector = None
+    for _, row in df_sector.iterrows():
+        for keyword in row["Keywords"]:
+            score = fuzz.partial_ratio(keyword.lower(), text.lower())
+            if score > best_score:
+                best_score = score
+                best_sector = {
+                    "Sector": row["Sector"],
+                    "Match Keyword": keyword,
+                    "Score": score,
+                    "Recommended Services": row["Recommended Services"]
+                }
+    return best_sector if best_score >= 60 else None
 
-    url = "https://query.wikidata.org/sparql"
-    headers = {"Accept": "application/sparql-results+json"}
-    response = requests.get(url, params={"query": query}, headers=headers)
+# --- OpenCorporates Lookup ---
+def get_opencorporates_data(name):
+    try:
+        url = f"https://api.opencorporates.com/v0.4/companies/search?q={name}&jurisdiction_code=th"
+        r = requests.get(url, timeout=5)
+        if r.status_code == 200:
+            items = r.json().get("results", {}).get("companies", [])
+            candidates = []
+            for c in items[:3]:  # top 3 only
+                company = c["company"]
+                label = company.get("name", "")
+                industry_list = company.get("industry_codes", [])
+                industry_desc = industry_list[0]["description"] if industry_list else "N/A"
+                sector_result = fuzzy_sector_match(industry_desc) or {}
+                candidates.append({
+                    "Company Name": label,
+                    "Industry": industry_desc,
+                    "Sector Match": sector_result.get("Sector", "Unmapped"),
+                    "Match Keyword": sector_result.get("Match Keyword", "-"),
+                    "Score": sector_result.get("Score", 0),
+                    "Recommended Services": sector_result.get("Recommended Services", "N/A")
+                })
+            return candidates
+    except:
+        return []
+    return []
 
-    if response.status_code == 200:
-        results = response.json().get("results", {}).get("bindings", [])
-        if results:
-            label = results[0].get("itemLabel", {}).get("value", "")
-            sector = results[0].get("sectorLabel", {}).get("value", "")
-            return label, sector
-    return None, None
+# --- UI Layout ---
+st.title("🔎 Thai Company Sector Matcher (Hybrid Intelligence)")
+st.markdown("Input a company name to discover matching sector and advisory services.")
 
-# --- Streamlit App ---
-st.title("🔍 Customer Profiling for Cybersecurity Advisory")
-st.markdown("Enter a customer name to find matching sector, compliance, and service needs.")
+user_input = st.text_input("Enter Thai org name or abbreviation:")
 
-customer_name = st.text_input("Customer Name")
+if user_input:
+    st.markdown("---")
+    st.markdown("### 🧠 External Intelligence (OpenCorporates)")
+    top_candidates = get_opencorporates_data(user_input)
 
-if customer_name:
-    # 1. Manual Mapping First
-    if customer_name in manual_org_map:
-        result = manual_org_map[customer_name]
-        st.success(f"✅ Matched Sector: {result['Sector']}")
-        st.markdown(f"**Compliance Pressure:** {result['Compliance Pressure']}")
-        st.markdown(f"**Regulator(s):** {result['Regulator']}")
-        st.markdown(f"**Recommended Services:** {result['Recommended Services']}")
-
+    if top_candidates:
+        df_results = pd.DataFrame(top_candidates)
+        st.dataframe(df_results[["Company Name", "Industry", "Sector Match", "Recommended Services"]])
     else:
-        matched = None
-        for _, row in df.iterrows():
-            # Try fuzzy match
-            if any(fuzz.partial_ratio(keyword.lower(), customer_name.lower()) > 85 for keyword in row["Keywords"]):
-                matched = row
-                break
+        st.warning("No result from OpenCorporates.")
 
-        if matched is not None:
-            st.success(f"✅ Matched Sector: {matched['Sector']}")
-            st.markdown(f"**Compliance Pressure:** {matched['Compliance Pressure']}")
-            st.markdown(f"**Regulator(s):** {matched['Regulator']}")
-            st.markdown(f"**Recommended Services:** {matched['Recommended Services']}")
-        else:
-            # Try querying Wikidata
-            label, sector = query_wikidata_org_info(customer_name)
-            if label:
-                st.success(f"🌐 Wikidata Match: {label}")
-                st.markdown(f"**Sector (from Wikidata):** {sector if sector else 'N/A'}")
-                st.info("ℹ️ Please map this result manually to services and compliance later.")
-            else:
-                st.warning("❗ No match found. Please map this organization manually for future lookups.")
-
-st.markdown("---")
-st.caption("This tool uses manual, fuzzy, and Wikidata SPARQL logic. Expand mappings for more coverage.")
+    st.markdown("---")
+    st.markdown("### 🔍 Local Fuzzy Matching (Backup)")
+    local_match = fuzzy_sector_match(user_input)
+    if local_match:
+        st.success(f"Local Match: **{local_match['Sector']}**")
+        st.markdown(f"**Keyword Matched:** {local_match['Match Keyword']}")
+        st.markdown(f"**Recommended Services:** {local_match['Recommended Services']}")
+    else:
+        st.warning("No strong local keyword match. Try expanding keyword table.")
