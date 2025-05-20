@@ -1,7 +1,19 @@
 import streamlit as st
 import pandas as pd
+from rapidfuzz import fuzz
 
-# --- Sample Data Mapping ---
+# --- Manual Mapping for Known Organizations ---
+manual_org_map = {
+    "กองทัพเรือ": {
+        "Sector": "Government / Defense (CII)",
+        "Compliance Pressure": "Thai Cyber Law, ISO 27001",
+        "Regulator": "NCSA",
+        "Recommended Services": "Cyber Risk Assessment (IT/OT), IRP & Playbook, Tabletop Exercise"
+    },
+    # Add more exact names here if needed
+}
+
+# --- Sector Data with Keywords ---
 data = [
     {
         "Sector": "Critical Infrastructure (CII)",
@@ -51,10 +63,10 @@ data = [
         "Compliance Pressure": "Thai Cyber Law, ISO 27001, Supply Chain Risk",
         "Regulator": "NCSA",
         "Recommended Services": "Cyber Risk Assessment (IT/OT), IRP, TTX, Backup/Restore Drill"
-    },
+    }
 ]
 
-# Convert to DataFrame for lookup
+# Convert to DataFrame for keyword-based lookup
 df = pd.DataFrame(data)
 
 # --- Streamlit App ---
@@ -64,19 +76,29 @@ st.markdown("Enter a customer name to find matching sector, compliance, and serv
 customer_name = st.text_input("Customer Name")
 
 if customer_name:
-    matched = None
-    for _, row in df.iterrows():
-        if any(keyword.lower() in customer_name.lower() for keyword in row["Keywords"]):
-            matched = row
-            break
+    # 1. Manual Mapping First
+    if customer_name in manual_org_map:
+        result = manual_org_map[customer_name]
+        st.success(f"✅ Matched Sector: {result['Sector']}")
+        st.markdown(f"**Compliance Pressure:** {result['Compliance Pressure']}")
+        st.markdown(f"**Regulator(s):** {result['Regulator']}")
+        st.markdown(f"**Recommended Services:** {result['Recommended Services']}")
 
-    if matched is not None:
-        st.success(f"✅ Matched Sector: {matched['Sector']}")
-        st.markdown(f"**Compliance Pressure:** {matched['Compliance Pressure']}")
-        st.markdown(f"**Regulator(s):** {matched['Regulator']}")
-        st.markdown(f"**Recommended Services:** {matched['Recommended Services']}")
     else:
-        st.warning("No exact match found. Please try using a known company name or keyword.")
+        matched = None
+        for _, row in df.iterrows():
+            # Try fuzzy match
+            if any(fuzz.partial_ratio(keyword.lower(), customer_name.lower()) > 85 for keyword in row["Keywords"]):
+                matched = row
+                break
+
+        if matched is not None:
+            st.success(f"✅ Matched Sector: {matched['Sector']}")
+            st.markdown(f"**Compliance Pressure:** {matched['Compliance Pressure']}")
+            st.markdown(f"**Regulator(s):** {matched['Regulator']}")
+            st.markdown(f"**Recommended Services:** {matched['Recommended Services']}")
+        else:
+            st.warning("❗ No match found. Please map this organization manually for future lookups.")
 
 st.markdown("---")
-st.caption("This tool uses internal mapping. Add more keywords and logic to expand.")
+st.caption("This tool uses exact and fuzzy matching. Expand 'manual_org_map' or 'Keywords' for better coverage.")
